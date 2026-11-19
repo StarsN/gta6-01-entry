@@ -1,79 +1,53 @@
-// The screenshot scenes behind ?shot=start|play|end. Each one plays the real rules forward from a
-// fresh world for a fixed number of steps, steered by a simple autopilot (look ahead each way the
-// paddle could move, keep clear of blocks, chase the lowest coin when that is safe), so the frame
-// is what a short game really looks like and the same seed always gives the same frame.
-import { FIELD, PLAYER, STEP } from './config.js';
-import { EVENT_OVER, KIND_BLOCK } from './world.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
-
-const START_SECONDS = 5;
-const PLAY_SECONDS = 26;
-const END_LIMIT_SECONDS = 600;
-/**
- * How far ahead, in seconds, the autopilot checks each way it could move: the play scene's pilot
- * looks well ahead and keeps all its lives; the end scene's looks only a moment ahead, so it is
- * caught out once the blocks speed up, as a hurried player is.
- */
-const HORIZON_PLAY = 0.7;
-const HORIZON_END = 0.25;
-const SAMPLE = 1 / 30;
-const DIRECTIONS = [0, -1, 1];
-/** Extra room, each side, it keeps between the paddle and a block. */
-const MARGIN = 10;
-
-/** Seconds until moving in `direction` (-1, 0, 1) runs the paddle into a block; Infinity when it never does. */
-function timeToHit(state, direction, horizon) {
-  const player = state.player;
-  for (let t = SAMPLE; t <= horizon; t += SAMPLE) {
-    const x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * t));
-    for (let index = 0; index < state.items.length; index += 1) {
-      const item = state.items[index];
-      if (!item.active || item.kind !== KIND_BLOCK) continue;
-      const y = item.y + item.speed * t;
-      if (y + item.height > player.y && y < player.y + player.height && item.x < x + player.width + MARGIN && item.x + item.width > x - MARGIN) return t;
-    }
-  }
-  return Infinity;
+// Deterministic screenshot scenes via ?shot=<name>&seed=<n>.
+// Each scene builds the real game, stages it by simulating play, then freezes on a composed frame.
+export function parseShot() {
+  const q = new URLSearchParams(location.search);
+  const shot = q.get('shot');
+  if (!shot) return null;
+  return { name: shot, seed: Number(q.get('seed') || 7) || 7 };
 }
 
-/** Of the safe ways to move, the one toward the lowest coin (or the centre); else the one that is hit last. */
-function autopilot(state, horizon) {
-  const player = state.player;
-  let coin = null;
-  for (let index = 0; index < state.items.length; index += 1) {
-    const item = state.items[index];
-    if (item.active && item.kind !== KIND_BLOCK && (coin === null || item.y > coin.y)) coin = item;
+// Called by main.js after the game exists: arrange actors for the requested scene.
+export function stageShot(game, shot) {
+  const p = game.player;
+  game.state = 'playing';
+  if (shot.name === 'cover') {
+    p.x = 1060; p.y = 640; game.camera.x = p.x - 640; game.camera.y = p.y - 360;
+    game.setMissionIndex(0);
+    return;
   }
-  const target = coin === null ? FIELD.width / 2 : coin.x + coin.width / 2;
-  const centre = player.x + player.width / 2;
-  const wanted = target > centre + 8 ? 1 : target < centre - 8 ? -1 : 0;
-  let best = wanted;
-  let bestTime = timeToHit(state, wanted, horizon);
-  for (let index = 0; index < DIRECTIONS.length && bestTime !== Infinity; index += 1) {
-    const time = timeToHit(state, DIRECTIONS[index], horizon);
-    if (time > bestTime) {
-      bestTime = time;
-      best = DIRECTIONS[index];
-    }
+  if (shot.name === 'drive') {
+    // Player driving east through traffic on the central avenue.
+    game.setMissionIndex(1);
+    const car = game.cars.find(c => c.driver !== 'police');
+    car.x = 760; car.y = 722; car.angle = 0; car.speed = 150; car.driver = 'player';
+    p.inCar = car; p.x = car.x; p.y = car.y;
+    let i = 0;
+    for (const c of game.cars) { if (c !== car && c.driver === 'traffic') { c.x = 860 + i * 130; c.y = i % 2 ? 678 : 724; c.angle = i % 2 ? Math.PI : 0; c.speed = 90; i++; } }
+    game.toast('Downtown traffic — watch the lights!', '#fff');
+    return;
   }
-  return best;
-}
-
-/**
- * Set `world` to the named scene (start, play or end; any other name is start) and return the
- * screen to draw over it and the best score to show.
- */
-export function stageShot(name, world) {
-  world.reset();
-  if (name !== 'play' && name !== 'end') {
-    for (let index = 0; index < START_SECONDS / STEP; index += 1) world.step(STEP, 0, true);
-    return { screen: SCREEN_TITLE, best: 0 };
+  if (shot.name === 'chase') {
+    // Police chase: wanted 3 stars, mission objective visible.
+    game.setMissionIndex(3);
+    game.mission.phase = 'active'; game.mission.stage = 'hide';
+    game.wanted.heat = 260; game.wanted.level = 3;
+    const car = game.cars.find(c => c.driver !== 'police');
+    car.x = 1080; car.y = 700; car.angle = 0.3; car.speed = 190; car.driver = 'player';
+    p.inCar = car; p.x = car.x; p.y = car.y; p.money = 470;
+    game.ensurePolice();
+    let i = 0;
+    for (const c of game.cars) if (c.driver === 'police') { c.x = 950 - i * 90; c.y = 640 + i * 55; c.angle = 0.2; c.speed = 170; i++; }
+    game.toast('The PD is on you — break line of sight!', '#ff8fa3');
+    return;
   }
-  const limit = name === 'end' ? END_LIMIT_SECONDS : PLAY_SECONDS;
-  const horizon = name === 'end' ? HORIZON_END : HORIZON_PLAY;
-  for (let index = 0; index < limit / STEP; index += 1) {
-    if (world.step(STEP, autopilot(world.state, horizon), false) & EVENT_OVER) break;
+  if (shot.name === 'mission') {
+    // On-foot mission moment with dialogue open.
+    game.setMissionIndex(0);
+    p.x = 470; p.y = 455; p.weapon = 'pistol'; p.ammo = 9; p.money = 270;
+    game.startDialogue(0);
+    return;
   }
-  const over = world.state.lives === 0;
-  return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
+  // Fallback: treat unknown names like the cover scene.
+  p.x = 1060; p.y = 640;
 }

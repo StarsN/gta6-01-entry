@@ -1,24 +1,40 @@
-// A working gta6-01 entry (Node 22, standard library only): the game is this directory's
-// game/ folder, plain static files a desktop browser loads offline (game/index.html and its ES
-// modules, no library and no network request), and the program hands it in. It copies game/ and
-// screenshots/ from beside this file to /output and writes /output/dossier.json, the summary the
-// judge reads, with the vendored make.fun library. Only the plumbing, not an open world: Block
-// Dodger, a plain 2D canvas game where a paddle dodges falling blocks and catches coins, with a
-// title screen, score, lives and levels, game over and restart, flat colours and no sound. Build
-// your own open-world crime game in its place (three.js or any library you vendor under game/),
-// put your 3 or 4 PNG or JPEG screenshots in screenshots/ (the first by name is the cover) and run it.
+// Palmera Heat — gta6-01 entry hand-in (Node 22, standard library only).
+// The game is this directory's game/ folder: "Palmera Heat", an original top-down 2D
+// open-world crime game that runs from plain static files in a desktop browser, fully
+// offline (game/index.html plus its ES modules under game/src/, no library, no network
+// request, all art drawn on canvas and all sound synthesized with WebAudio). This program
+// copies game/ and screenshots/ from beside this file to /output and writes
+// /output/dossier.json, the summary the judge reads, with the vendored make.fun library.
+// Before writing the dossier it sanity-checks the hand-in the way the scorer will:
+// exactly the screenshots named in shots.json must be present and each within the size cap.
 //
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+
+const GAME_TITLE = 'Palmera Heat';
+
+// Palmera Heat screenshot validation: shots.json is the manifest of staged scenes, and
+// every file it names must exist in screenshots/ at a size the scorer accepts.
+const shotManifest = JSON.parse(readFileSync(join(here, 'shots.json'), 'utf8'));
+const shotFiles = existsSync(join(here, 'screenshots')) ? readdirSync(join(here, 'screenshots')) : [];
+for (const shot of shotManifest) {
+  const file = join(here, 'screenshots', shot.name);
+  if (!existsSync(file)) throw new Error(`${GAME_TITLE}: missing screenshot ${shot.name}`);
+  const bytes = statSync(file).size;
+  if (bytes > 262144) throw new Error(`${GAME_TITLE}: screenshot ${shot.name} is ${bytes} bytes, over the 256 KiB cap`);
+}
+const unlisted = shotFiles.filter((name) => !shotManifest.some((shot) => shot.name === name));
+if (unlisted.length) throw new Error(`${GAME_TITLE}: screenshots not listed in shots.json: ${unlisted.join(', ')}`);
+console.log(`${GAME_TITLE}: ${shotManifest.length} screenshots validated, handing in the game.`);
 
 mkdirSync(out, { recursive: true });
 cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
